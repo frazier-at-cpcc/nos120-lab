@@ -6,6 +6,7 @@
   vars:
     rocky_iso_url: "https://download.rockylinux.org/pub/rocky/9/isos/x86_64/Rocky-9.5-x86_64-minimal.iso"
     iso_path: "/var/lib/libvirt/images/Rocky-9.5-x86_64-minimal.iso"
+    mount_path: "/mnt/rocky"
     vms:
       - name: "workstation"
         hostname: "workstation.lab.example.com"
@@ -25,11 +26,32 @@
         mode: '0644'
       register: iso_download
 
+    - name: Ensure mount directory exists
+      file:
+        path: "{{ mount_path }}"
+        state: directory
+        mode: '0755'
+
+    - name: Mount Rocky Linux ISO
+      mount:
+        path: "{{ mount_path }}"
+        src: "{{ iso_path }}"
+        fstype: iso9660
+        state: mounted
+        opts: ro
+
     - name: Create VM disk images
       command: >
         qemu-img create -f qcow2 /var/lib/libvirt/images/{{ item.name }}.qcow2 30G
       args:
         creates: "/var/lib/libvirt/images/{{ item.name }}.qcow2"
+      with_items: "{{ vms }}"
+
+    - name: Copy kickstart files to tmp
+      copy:
+        src: "/tmp/{{ item.name }}_kickstart.cfg"
+        dest: "/tmp/ks.cfg"
+        remote_src: yes
       with_items: "{{ vms }}"
 
     - name: Define and create VMs
@@ -40,11 +62,11 @@
         --vcpus 2
         --disk path=/var/lib/libvirt/images/{{ item.name }}.qcow2,format=qcow2
         --os-variant rocky9.0
-        --network bridge=br0
+        --network bridge=br0,model=virtio
         --graphics none
-        --location {{ iso_path }}
-        --extra-args "inst.ks=file:///tmp/{{ item.name }}_kickstart.cfg console=ttyS0"
-        --initrd-inject=/tmp/{{ item.name }}_kickstart.cfg
+        --location {{ mount_path }}
+        --initrd-inject=/tmp/ks.cfg
+        --extra-args "inst.ks=file:/ks.cfg console=ttyS0 ip={{ item.ip }}::172.25.250.254:255.255.255.0:{{ item.hostname }}:eth0:none nameserver=8.8.8.8"
         --noautoconsole
       args:
         creates: "/etc/libvirt/qemu/{{ item.name }}.xml"
@@ -58,7 +80,26 @@
       delay: 30
       with_items: "{{ vms }}"
 
-    - name: Ensure VMs are started
-      command: virsh start {{ item.name }}
-      ignore_errors: yes
+    - name: Check VM states
+      command: virsh domstate {{ item.name }}
+      register: vm_states
       with_items: "{{ vms }}"
+
+    - name: Start VMs if not running
+      command: virsh start {{ item.item.name }}
+      when: item.stdout != "running"
+      with_items: "{{ vm_states.results }}"
+
+    - name: Unmount Rocky Linux ISO
+      mount:
+        path: "{{ mount_path }}"
+        state: absent
+
+    - name: Verify VM network connectivity
+      command: virsh domifaddr {{ item.name }}
+      register: vm_addresses
+      with_items: "{{ vms }}"
+
+    - name: Display VM network information
+      debug:
+        var: vm_addresses.results
