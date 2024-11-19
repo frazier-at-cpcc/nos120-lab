@@ -1,0 +1,81 @@
+---
+- name: Configure Server B VM
+  hosts: serverb
+  become: true
+
+  tasks:
+    - name: Set hostname
+      hostname:
+        name: "serverb.lab.example.com"
+
+    - name: Install required tools and services
+      yum:
+        name:
+          - vim
+          - nano
+          - firewalld
+          - httpd
+        state: present
+
+    - name: Enable and start firewalld
+      systemd:
+        name: firewalld
+        state: started
+        enabled: true
+
+    - name: Enable and start HTTPD service
+      systemd:
+        name: httpd
+        state: started
+        enabled: true
+
+    - name: Create a misconfigured service
+      copy:
+        dest: /etc/systemd/system/misconfigured.service
+        content: |
+          [Unit]
+          Description=Misconfigured Service
+          [Service]
+          ExecStart=/bin/false
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Reload systemd and enable misconfigured service
+      shell: |
+        systemctl daemon-reload
+        systemctl enable misconfigured.service
+
+    - name: Set up a cron job for backups
+      cron:
+        name: "Backup /etc directory"
+        user: root
+        minute: "0"
+        hour: "0"
+        weekday: "0"
+        job: "tar -czf /backups/etc-backup.tar.gz /etc"
+
+    - name: Create shared directory for project_team group
+      file:
+        path: /examdata
+        state: directory
+        owner: root
+        group: project_team
+        mode: "0770"
+
+    - name: Create project_team group
+      group:
+        name: project_team
+
+    - name: Create users and add to project_team group
+      user:
+        name: "{{ item }}"
+        groups: project_team
+        append: true
+        password: "{{ 'password123' | password_hash('sha512') }}"
+      with_items:
+        - "user1"
+        - "user2"
+
+    - name: Output setup complete message
+      debug:
+        msg: "Server B configuration is complete!"

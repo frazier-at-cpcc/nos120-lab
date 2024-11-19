@@ -1,0 +1,261 @@
+---
+- name: Prepare Rocky Linux VM to Host Nested Lab Environment with KVM, Virt-Manager, and Cockpit
+  hosts: lab-host
+  become: true
+
+  vars:
+    lab_network: "172.25.250.0/24"
+    lab_bridge: "br0"
+    lab_interface: "ens34"  # Interface to be used for lab network
+    mgmt_interface: "ens33" # Management interface to be left alone
+    dhcp_range_start: "172.25.250.100"
+    dhcp_range_end: "172.25.250.200"
+    dns_servers: ["8.8.8.8", "8.8.4.4"]
+
+  tasks:
+  # Check if lab interface exists
+  - name: Check if lab interface exists
+    command: ip link show {{ lab_interface }}
+    register: lab_interface_check
+    ignore_errors: yes
+    changed_when: false
+
+  - name: Fail if lab interface doesn't exist
+    fail:
+      msg: "Required interface {{ lab_interface }} not found"
+    when: lab_interface_check.rc != 0
+
+  # Enable required repositories
+  - name: Enable EPEL repository
+    dnf:
+      name: epel-release
+      state: present
+
+  - name: Enable CRB repository
+    command: dnf config-manager --set-enabled crb
+
+  # Ensure required packages are installed
+  - name: Install required packages
+    dnf:
+      name:
+        - dnsmasq
+        - qemu-kvm
+        - libvirt
+        - virt-install
+        - virt-manager
+        - cockpit
+        - cockpit-machines
+        - firewalld
+        - policycoreutils-python-utils
+        - NetworkManager
+      state: present
+
+  # Enable and start NetworkManager
+  - name: Enable and start NetworkManager
+    systemd:
+      name: NetworkManager
+      state: started
+      enabled: true
+
+  # Enable and start firewalld
+  - name: Enable and start firewalld
+    systemd:
+      name: firewalld
+      state: started
+      enabled: true
+
+  # Enable and start libvirtd service
+  - name: Enable and start libvirtd service
+    systemd:
+      name: libvirtd
+      state: started
+      enabled: true
+
+  # Stop libvirt default network to avoid conflicts
+  - name: Stop and disable libvirt default network
+    command: "{{ item }}"
+    with_items:
+      - virsh net-destroy default
+      - virsh net-autostart default --disable
+    ignore_errors: yes
+
+  # Add the current user to the libvirt group
+  - name: Add the current user to the libvirt group
+    user:
+      name: "{{ ansible_user_id }}"
+      groups: libvirt
+      append: true
+
+  # Remove any existing bridge configuration
+  - name: Remove existing bridge if it exists
+    command: "nmcli con delete {{ lab_bridge }}"
+    ignore_errors: yes
+
+  # Remove any existing lab interface connection
+  - name: Remove existing lab interface connection
+    command: "nmcli con delete {{ lab_interface }}"
+    ignore_errors: yes
+
+  # Create bridge interface
+  - name: Create bridge interface
+    command: >
+      nmcli con add type bridge
+      con-name {{ lab_bridge }}
+      ifname {{ lab_bridge }}
+      ipv4.addresses 172.25.250.254/24
+      ipv4.method manual
+      connection.autoconnect yes
+      bridge.stp no
+
+  # Add lab interface to bridge
+  - name: Add lab interface to bridge
+    command: >
+      nmcli con add type bridge-slave
+      con-name {{ lab_interface }}
+      ifname {{ lab_interface }}
+      master {{ lab_bridge }}
+
+  # Bring up bridge and interface
+  - name: Activate bridge connection
+    command: "nmcli con up {{ lab_bridge }}"
+
+  - name: Activate lab interface connection
+    command: "nmcli con up {{ lab_interface }}"
+
+  # Wait for bridge interface to be ready
+  - name: Wait for bridge interface to be ready
+    command: "ip link show {{ lab_bridge }} up"
+    register: bridge_check
+    until: bridge_check.rc == 0
+    retries: 10
+    delay: 2
+
+  # Configure NAT using firewalld
+  - name: Enable masquerade in firewalld
+    firewalld:
+      masquerade: yes
+      state: enabled
+      permanent: yes
+      immediate: yes
+
+  - name: Allow traffic from lab network
+    firewalld:
+      rich_rule: "rule family=ipv4 source address={{ lab_network }} masquerade"
+      permanent: yes
+      state: enabled
+      immediate: yes
+
+  # Configure firewall for dnsmasq
+  - name: Allow DNS and DHCP in firewall
+    firewalld:
+      service: "{{ item }}"
+      permanent: yes
+      state: enabled
+      immediate: yes
+    with_items:
+      - dns
+      - dhcp
+
+  # Configure SELinux for dnsmasq
+  - name: Set SELinux context for dnsmasq
+    sefcontext:
+      target: '/etc/dnsmasq.d(/.*)?'
+      setype: dnsmasq_etc_t
+      state: present
+
+  - name: Apply new SELinux context
+    command: restorecon -Rv /etc/dnsmasq.d
+
+  # Configure dnsmasq for DHCP and DNS
+  - name: Configure dnsmasq for DHCP and DNS
+    copy:
+      dest: /etc/dnsmasq.d/lab.conf
+      content: |
+        interface={{ lab_bridge }}
+        bind-interfaces
+        except-interface=lo
+        dhcp-range={{ dhcp_range_start }},{{ dhcp_range_end }},255.255.255.0,12h
+        dhcp-option=option:router,172.25.250.254
+        dhcp-option=option:dns-server,{{ dns_servers[0] }},{{ dns_servers[1] }}
+        domain=lab.example.com
+        log-queries
+        log-dhcp
+
+  - name: Stop dnsmasq if running
+    systemd:
+      name: dnsmasq
+      state: stopped
+    ignore_errors: yes
+
+  # Wait for bridge to be fully ready before starting dnsmasq
+  - name: Wait for bridge to be fully ready
+    wait_for:
+      timeout: 10
+
+  - name: Enable and start dnsmasq service
+    systemd:
+      name: dnsmasq
+      state: restarted
+      enabled: true
+
+  # Enable IP forwarding
+  - name: Enable IP forwarding
+    sysctl:
+      name: net.ipv4.ip_forward
+      value: 1
+      state: present
+      reload: true
+      
+  # Prepare DNS resolution for nested VMs
+  - name: Add hostnames for nested VMs to /etc/hosts
+    lineinfile:
+      path: /etc/hosts
+      line: "{{ item }}"
+      state: present
+    with_items:
+      - "172.25.250.9   workstation.lab.example.com workstation"
+      - "172.25.250.10  servera.lab.example.com servera"
+      - "172.25.250.11  serverb.lab.example.com serverb"
+
+  # Verify system supports virtualization
+  - name: Verify system supports virtualization
+    shell: |
+      if grep -q "vmx\|svm" /proc/cpuinfo; then
+        echo "Nested virtualization supported"
+      else
+        echo "Nested virtualization NOT supported"
+      fi
+    register: nested_virt_check
+
+  - debug:
+      msg: "{{ nested_virt_check.stdout }}"
+
+  # Set up default storage pool for KVM
+  - name: Set up default storage pool for KVM
+    command: virsh pool-define-as default dir --target /var/lib/libvirt/images
+    args:
+      creates: /var/lib/libvirt/images
+
+  - name: Start and autostart the default storage pool
+    command: >
+      virsh pool-start default && virsh pool-autostart default
+    args:
+      creates: /var/lib/libvirt/images
+
+  # Configure Cockpit for web-based management
+  - name: Enable and start Cockpit service
+    systemd:
+      name: cockpit
+      state: started
+      enabled: true
+
+  - name: Open Cockpit management interface port in the firewall
+    firewalld:
+      service: cockpit
+      permanent: yes
+      state: enabled
+      immediate: yes
+
+  - name: Print Cockpit access URL
+    debug:
+      msg: "Access Cockpit Web Interface at https://{{ ansible_host }}:9090"

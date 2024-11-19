@@ -1,0 +1,42 @@
+---
+- name: Configure Server A VM
+  hosts: servera
+  become: true
+
+  tasks:
+    - name: Set hostname
+      hostname:
+        name: "servera.lab.example.com"
+
+    - name: Install required tools
+      yum:
+        name:
+          - vim
+          - nano
+          - firewalld
+        state: present
+
+    - name: Enable and start firewalld
+      systemd:
+        name: firewalld
+        state: started
+        enabled: true
+
+    - name: Create and mount shared file system
+      shell: |
+        truncate -s 2G /root/project_data.img
+        mkfs.ext4 /root/project_data.img
+        mkdir -p /mnt/project_data
+        mount /root/project_data.img /mnt/project_data
+        echo "/root/project_data.img /mnt/project_data ext4 defaults 0 0" >> /etc/fstab
+
+    - name: Verify the file system is mounted
+      mount:
+        path: /mnt/project_data
+        src: /root/project_data.img
+        fstype: ext4
+        opts: defaults
+
+    - name: Output setup complete message
+      debug:
+        msg: "Server A configuration is complete!"

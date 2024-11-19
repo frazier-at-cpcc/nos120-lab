@@ -1,0 +1,51 @@
+---
+- name: Configure Workstation VM
+  hosts: workstation
+  become: true
+
+  tasks:
+    - name: Set hostname
+      hostname:
+        name: "workstation.lab.example.com"
+
+    - name: Install required tools
+      yum:
+        name:
+          - vim
+          - nano
+          - curl
+          - wget
+          - sshpass
+        state: present
+
+    - name: Create the student user
+      user:
+        name: "student"
+        password: "{{ 'student' | password_hash('sha512') }}"
+        shell: "/bin/bash"
+
+    - name: Generate SSH key for student
+      ansible.builtin.command: >
+        ssh-keygen -t rsa -b 2048 -f /home/student/.ssh/id_rsa -q -N ""
+      args:
+        creates: /home/student/.ssh/id_rsa
+      become_user: student
+
+    - name: Ensure proper permissions for SSH keys
+      file:
+        path: "/home/student/.ssh"
+        state: directory
+        mode: "0700"
+        owner: student
+        group: student
+
+    - name: Verify connectivity to servera and serverb
+      ping:
+        dest: "{{ item }}"
+      with_items:
+        - "servera.lab.example.com"
+        - "serverb.lab.example.com"
+
+    - name: Output setup complete message
+      debug:
+        msg: "Workstation configuration is complete!"
