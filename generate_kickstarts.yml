@@ -1,0 +1,33 @@
+---
+- name: Generate Kickstart Files for VMs
+  hosts: lab-host
+  become: true
+
+  vars:
+    vms:
+      - name: "workstation"
+        hostname: "workstation.lab.example.com"
+        ip: "172.25.250.9"
+      - name: "servera"
+        hostname: "servera.lab.example.com"
+        ip: "172.25.250.10"
+      - name: "serverb"
+        hostname: "serverb.lab.example.com"
+        ip: "172.25.250.11"
+
+  tasks:
+    - name: Create temporary directory for kickstart files
+      file:
+        path: /tmp
+        state: directory
+        mode: '0755'
+
+    - name: Generate kickstart files from template
+      template:
+        src: kickstart_template.cfg
+        dest: "/tmp/{{ item.name }}_kickstart.cfg"
+        mode: '0644'
+      with_items: "{{ vms }}"
+      vars:
+        IP: "{{ item.ip }}"
+        HOSTNAME: "{{ item.hostname }}"

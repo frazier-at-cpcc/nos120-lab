@@ -1,0 +1,64 @@
+---
+- name: Provision Rocky Linux VMs
+  hosts: lab-host
+  become: true
+
+  vars:
+    rocky_iso_url: "https://download.rockylinux.org/pub/rocky/9/isos/x86_64/Rocky-9.2-x86_64-minimal.iso"
+    iso_path: "/var/lib/libvirt/images/Rocky-9.2-x86_64-minimal.iso"
+    vms:
+      - name: "workstation"
+        hostname: "workstation.lab.example.com"
+        ip: "172.25.250.9"
+      - name: "servera"
+        hostname: "servera.lab.example.com"
+        ip: "172.25.250.10"
+      - name: "serverb"
+        hostname: "serverb.lab.example.com"
+        ip: "172.25.250.11"
+
+  tasks:
+    - name: Download Rocky Linux ISO if not present
+      get_url:
+        url: "{{ rocky_iso_url }}"
+        dest: "{{ iso_path }}"
+        mode: '0644'
+      register: iso_download
+
+    - name: Create VM disk images
+      command: >
+        qemu-img create -f qcow2 /var/lib/libvirt/images/{{ item.name }}.qcow2 30G
+      args:
+        creates: "/var/lib/libvirt/images/{{ item.name }}.qcow2"
+      with_items: "{{ vms }}"
+
+    - name: Define and create VMs
+      command: >
+        virt-install
+        --name {{ item.name }}
+        --memory 4096
+        --vcpus 2
+        --disk path=/var/lib/libvirt/images/{{ item.name }}.qcow2,format=qcow2
+        --os-variant rocky9.0
+        --network bridge=br0
+        --graphics none
+        --location {{ iso_path }}
+        --extra-args "inst.ks=file:/kickstart.cfg console=ttyS0"
+        --initrd-inject=/tmp/{{ item.name }}_kickstart.cfg
+        --noautoconsole
+      args:
+        creates: "/etc/libvirt/qemu/{{ item.name }}.xml"
+      with_items: "{{ vms }}"
+
+    - name: Wait for VMs to complete installation
+      command: virsh domstate {{ item.name }}
+      register: vm_state
+      until: vm_state.stdout == "running" or vm_state.stdout == "shut off"
+      retries: 60
+      delay: 30
+      with_items: "{{ vms }}"
+
+    - name: Ensure VMs are started
+      command: virsh start {{ item.name }}
+      ignore_errors: yes
+      with_items: "{{ vms }}"
