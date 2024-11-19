@@ -4,8 +4,8 @@
   become: true
 
   vars:
-    rocky_iso_url: "https://download.rockylinux.org/pub/rocky/9/isos/x86_64/Rocky-9.2-x86_64-minimal.iso"
-    iso_path: "/var/lib/libvirt/images/Rocky-9.2-x86_64-minimal.iso"
+    rocky_iso_url: "https://download.rockylinux.org/pub/rocky/9/isos/x86_64/Rocky-9.5-x86_64-minimal.iso"
+    iso_path: "/var/lib/libvirt/images/Rocky-9.5-x86_64-minimal.iso"
     vms:
       - name: "workstation"
         hostname: "workstation.lab.example.com"
