@@ -43,7 +43,7 @@
         --network bridge=br0
         --graphics none
         --location {{ iso_path }}
-        --extra-args "inst.ks=file:/kickstart.cfg console=ttyS0"
+        --extra-args "inst.ks=file:///tmp/{{ item.name }}_kickstart.cfg console=ttyS0"
         --initrd-inject=/tmp/{{ item.name }}_kickstart.cfg
         --noautoconsole
       args:
